@@ -1,0 +1,283 @@
+
+/*
+ * smbusmodule.c - Python bindings for Linux SMBus access through i2c-dev
+ * Copyright (C) 2005-2007 Mark M. Hoffman <mhoffman@xxxxxxxxxxxxx>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; version 2 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ */
+
+#include <Python.h>
+#include "structmember.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <linux/i2c-dev.h>
+
+/*
+** These are required to build this module against Linux older than 2.6.23.
+*/
+#ifndef I2C_SMBUS_I2C_BLOCK_BROKEN
+#undef I2C_SMBUS_I2C_BLOCK_DATA
+#define I2C_SMBUS_I2C_BLOCK_BROKEN	6
+#define I2C_SMBUS_I2C_BLOCK_DATA	8
+#endif
+
+/*yDoc_STRVAR(SMBus_module_doc,
+	"This module defines an object type that allows SMBus transactions\n"
+	"on hosts running the Linux kernel.  The host kernel must have I2C\n"
+	"support, I2C device interface support, and a bus adapter driver.\n"
+	"All of these can be either built-in to the kernel, or loaded from\n"
+	"modules.\n"
+	"\n"
+	"Because the I2C device interface is opened R/W, users of this\n"
+	"module usually must have root permissions.\n");
+*/
+
+typedef struct {
+	PyObject_HEAD
+
+	int fd;		/* open file descriptor: /dev/i2c-?, or -1 */
+	int addr;	/* current client SMBus address */
+	int pec;	/* !0 => Packet Error Codes enabled */
+} SMBus;
+
+static PyObject *
+SMBus_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
+{
+	SMBus *self;
+
+	if ((self = (SMBus *)type->tp_alloc(type, 0)) == NULL)
+		return NULL;
+
+	self->fd = -1;
+	self->addr = -1;
+	self->pec = 0;
+
+	return (PyObject *)self;
+}
+
+PyDoc_STRVAR(SMBus_close_doc,
+	"close()\n\n"
+	"Disconnects the object from the bus.\n");
+
+static PyObject *
+SMBus_close(SMBus *self)
+{
+	if ((self->fd != -1) && (close(self->fd) == -1)) {
+		PyErr_SetFromErrno(PyExc_IOError);
+		return NULL;
+	}
+
+	self->fd = -1;
+	self->addr = -1;
+	self->pec = 0;
+
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+static void
+SMBus_dealloc(SMBus *self)
+{
+	PyObject *ref = SMBus_close(self);
+	Py_XDECREF(ref);
+
+    /*old python 2.7 declaration */
+	/*self->ob_type->tp_free((PyObject *)self);*/
+	Py_TYPE(self)->tp_free((PyObject*)self);
+}
+
+#define MAXPATH 16
+
+PyDoc_STRVAR(SMBus_open_doc,
+	"open(bus)\n\n"
+	"Connects the object to the specified SMBus.\n");
+
+static PyObject *
+SMBus_open(SMBus *self, PyObject *args, PyObject *kwds)
+{
+	int bus;
+	char path[MAXPATH];
+
+	static char *kwlist[] = {"bus", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "i:open", kwlist, &bus))
+		return NULL;
+
+	if (snprintf(path, MAXPATH, "/dev/i2c-%d", bus) >= MAXPATH) {
+		PyErr_SetString(PyExc_OverflowError,
+			"Bus number is invalid.");
+		return NULL;
+	}
+
+	if ((self->fd = open(path, O_RDWR, 0)) == -1) {
+		PyErr_SetFromErrno(PyExc_IOError);
+		return NULL;
+	}
+
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+static int
+SMBus_init(SMBus *self, PyObject *args, PyObject *kwds)
+{
+	int bus = -1;
+
+	static char *kwlist[] = {"bus", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "|i:__init__",
+			kwlist, &bus))
+		return -1;
+
+	if (bus >= 0) {
+		SMBus_open(self, args, kwds);
+		if (PyErr_Occurred())
+			return -1;
+	}
+
+	return 0;
+}
+
+/*
+ * private helper function, 0 => success, !0 => error
+ */
+static int
+SMBus_set_addr(SMBus *self, int addr)
+{
+	int ret = 0;
+
+	if (self->addr != addr) {
+		ret = ioctl(self->fd, I2C_SLAVE, addr);
+		self->addr = addr;
+	}
+
+	return ret;
+}
+
+#define SMBus_SET_ADDR(self, addr) do { \
+	if (SMBus_set_addr(self, addr)) { \
+		PyErr_SetFromErrno(PyExc_IOError); \
+		return NULL; \
+	} \
+} while(0)
+
+PyDoc_STRVAR(SMBus_write_quick_doc,
+	"write_quick(addr)\n\n"
+	"Perform SMBus Quick transaction.\n");
+
+static PyObject *
+SMBus_write_quick(SMBus *self, PyObject *args)
+{
+	int addr;
+	__s32 result;
+
+	if (!PyArg_ParseTuple(args, "i:write_quick", &addr))
+		return NULL;
+
+	SMBus_SET_ADDR(self, addr);
+
+	if ((result = i2c_smbus_write_quick(self->fd, I2C_SMBUS_WRITE))) {
+		PyErr_SetFromErrno(PyExc_IOError);
+		return NULL;
+	}
+
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+PyDoc_STRVAR(SMBus_read_byte_doc,
+	"read_byte(addr) -> result\n\n"
+	"Perform SMBus Read Byte transaction.\n");
+
+static PyObject *
+SMBus_read_byte(SMBus *self, PyObject *args)
+{
+	int addr;
+	__s32 result;
+
+	if (!PyArg_ParseTuple(args, "i:read_byte", &addr))
+		return NULL;
+
+	SMBus_SET_ADDR(self, addr);
+
+	if ((result = i2c_smbus_read_byte(self->fd)) == -1) {
+		PyErr_SetFromErrno(PyExc_IOError);
+		return NULL;
+	}
+
+	return Py_BuildValue("l", (long)result);
+}
+
+PyDoc_STRVAR(SMBus_write_byte_doc,
+	"write_byte(addr, val)\n\n"
+	"Perform SMBus Write Byte transaction.\n");
+
+static PyObject *
+SMBus_write_byte(SMBus *self, PyObject *args)
+{
+	int addr, val;
+	__s32 result;
+
+	if (!PyArg_ParseTuple(args, "ii:write_byte", &addr, &val))
+		return NULL;
+
+	SMBus_SET_ADDR(self, addr);
+
+	if ((result = i2c_smbus_write_byte(self->fd, (__u8)val)) == -1) {
+		PyErr_SetFromErrno(PyExc_IOError);
+		return NULL;
+	}
+
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+PyDoc_STRVAR(SMBus_read_byte_data_doc,
+	"read_byte_data(addr, cmd) -> result\n\n"
+	"Perform SMBus Read Byte Data transaction.\n");
+
+static PyObject *
+SMBus_read_byte_data(SMBus *self, PyObject *args)
+{
+	int addr, cmd;
+	__s32 result;
+
+	if (!PyArg_ParseTuple(args, "ii:read_byte_data", &addr, &cmd))
+		return NULL;
+
+	SMBus_SET_ADDR(self, addr);
+
+	if ((result = i2c_smbus_read_byte_data(self->fd, (__u8)cmd)) == -1) {
+		PyErr_SetFromErrno(PyExc_IOError);
+		return NULL;
+	}
+
+	return Py_BuildValue("l", (long)result);
+}
+
+PyDoc_STRVAR(SMBus_write_byte_data_doc,
+	"write_byte_data(addr, cmd, val)\n\n"
+	"Perform SMBus Write Byte Data transaction.\n");
+
+static PyObject *
+SMBus_write_byte_data(SMBus *self, PyObject *args)
+{
+	int addr, cmd, val;
+	__s32 result;
+
+	if (!PyArg_ParseTuple(args, "iii:write_byte_data", &addr, &cmd, &val))
+		return NULL;
+
+	SMBus_SET_ADDR(self, addr);
