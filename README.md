@@ -12,6 +12,13 @@ sudo apt-get install libi2c-dev i2c-tools
 Follow [these directions](http://www.stuffaboutcode.com/2014/06/raspberry-pi-adxl345-accelerometer.html)
 to unblacklist your I2C bus
 
+Then, to install
+```
+python3 setup.py build
+sudo python3 setup.py install
+```
+
+## Old README
 
 
 README: py-smbus
