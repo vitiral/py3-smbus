@@ -1,4 +1,7 @@
 
+Followed directions from [this forum post](http://www.raspberrypi.org/forums/viewtopic.php?f=32&t=22348) to make
+smbus work with python3
+
 README: py-smbus
 
 To build:
