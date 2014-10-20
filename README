@@ -2,6 +2,18 @@
 Followed directions from [this forum post](http://www.raspberrypi.org/forums/viewtopic.php?f=32&t=22348) to make
 smbus work with python3
 
+## Before installation
+```
+sudo apt-get update
+sudo apt-get install python3-dev
+sudo apt-get install libi2c-dev i2c-tools
+```
+
+Follow [these directions](http://www.stuffaboutcode.com/2014/06/raspberry-pi-adxl345-accelerometer.html)
+to unblacklist your I2C bus
+
+
+
 README: py-smbus
 
 To build:
